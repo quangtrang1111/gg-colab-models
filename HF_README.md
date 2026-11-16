@@ -21,6 +21,10 @@ This repo contains the **engine only**. The model weights (Qwen3-Coder-30B-A3B G
 [`unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF`](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF)
 (`Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf`, 12.85 GB).
 
+> **Project & full scripts:** [github.com/quangtrang1111/gg-colab-models](https://github.com/quangtrang1111/gg-colab-models)
+> — the complete toolkit that deploys this engine on a free Colab T4 and wires it into
+> Command Code as a BYOK model (autonomous restorer, benchmarks, diagnostics).
+
 ---
 
 ## What is in here
@@ -111,7 +115,7 @@ Verified on a Colab T4 with `Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf`:
 
 | Setting | Value | Why |
 |---|---|---|
-| `-c` | `49152` | Command Code-style clients over-count tokens by ~1.3×; 49,152 gives 1.5× headroom over a declared 32,768 window |
+| `-c` | `49152` | Command Code-style clients over-count tokens by ~1.3×; 49,152 is the **server** capacity, while the client's declared window is held at 35,000 so its over-count still fits |
 | `--cache-type-k` | `q8_0` | attention keys drive retrieval quality — keep this at 8-bit |
 | `--cache-type-v` | `q4_0` | the cheap knob; halves KV memory vs `q8_0` |
 | `-fa` | `on` | flash attention (also required for a quantized V cache) |

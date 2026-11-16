@@ -13,6 +13,15 @@ providers.json         (HTTPS)               └─ llama-server (llama.cpp, -ng
                                                    └─ Qwen3-Coder-30B-A3B UD-IQ3_XXS.gguf
 ```
 
+### Links
+
+| | |
+|---|---|
+| **This repo** | [github.com/quangtrang1111/gg-colab-models](https://github.com/quangtrang1111/gg-colab-models) |
+| **Prebuilt engine** | [huggingface.co/quangtrang/llama-server-colab-t4](https://huggingface.co/quangtrang/llama-server-colab-t4) — the `llama-server` binary + CUDA runtime libs (public, anonymous download) |
+| **Model weights** | [huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF) — `UD-IQ3_XXS` GGUF, 12.85 GB |
+| **Colab CLI** | [github.com/googlecolab/google-colab-cli](https://github.com/googlecolab/google-colab-cli) — cross-platform CLI this project drives |
+
 ---
 
 ## Quick start (Windows)
@@ -44,8 +53,8 @@ To point Command Code at it, `providers.json` should contain:
       "apiKey": false,
       "models": {
         "qwen3-coder-30b": {
-          "name": "Qwen3-Coder-30B (Colab T4, 32K)",
-          "contextWindow": 32768,
+          "name": "Qwen3-Coder-30B (Colab T4, 48K)",
+          "contextWindow": 35000,
           "maxOutput": 4096,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 }
@@ -92,10 +101,15 @@ ceiling is ~14.5 GiB (not the 15,360 MiB `nvidia-smi` reports).
 | **49,152** | **`q8_0` / `q4_0`** | **14,239 MiB** | **current config** |
 | 65,536 | `q8_0` / `q4_0` | ~14,843 MiB | `CUDA error: the resource allocation failed` |
 
-**4. Clients over-count tokens.** Command Code's accounting runs **~1.3×** llama.cpp's — it
-sent 21,186 tokens while declaring 16,384, and 42,611 while declaring 32,768. So the
-server's `n_ctx` must be **≥ 1.3 × the declared `contextWindow`**, or requests are rejected
-with `request (N tokens) exceeds the available context size (M tokens)`.
+**4. Clients over-count tokens.** Command Code's accounting runs **~1.3×** llama.cpp's — it sent
+21,186 tokens while declaring 16,384, and 42,611 while declaring 32,768. So the server's
+`n_ctx` must be **≥ 1.3 × the declared `contextWindow`**, or requests are rejected with
+`request (N tokens) exceeds the available context size (M tokens)`.
+
+That is why the *declared* window (`contextWindow: 35000` → ≈45,500 real tokens) is kept
+below the server's 49,152 capacity, and why the display name says **48K** while the client
+window is 35K: the 48K is what the **server** can hold, and the client is deliberately
+capped lower so its 1.3× over-count still fits.
 
 **5. Prefill speed is set by the ubatch.** With quantized weights the ~12.85 GB is re-read
 for *every* ubatch, so a 21K-token prompt at `-ub 256` means 83 ubatches (~1 TB of weight
