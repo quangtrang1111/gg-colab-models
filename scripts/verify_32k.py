@@ -4,10 +4,10 @@ from config import CHAT_URL, MODEL
 URL = CHAT_URL
 
 # ~23K-token prompt (above the 21186 that previously overflowed 8K, below 32768).
-# Each filler repeat is ~25 tokens; 1750 repeats ~= 44K tokens (exceeds Command Code 42611).
+# Each filler repeat is ~25 tokens; 1850 repeats ~= 46K tokens (above the 35K declared window x1.3).
 filler = ("You are a helpful coding assistant. Follow the project conventions carefully. "
           "Prefer small, focused edits. Keep functions pure where possible. ")
-block = filler * 1750
+block = filler * 1850
 prompt = block + "\n\nNow reply with exactly the word OK and nothing else."
 
 body = {"model": MODEL,

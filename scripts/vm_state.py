@@ -3,7 +3,7 @@ import os, re, urllib.request, subprocess
 def sh(c): return subprocess.run(["bash","-c",c],capture_output=True,text=True).stdout
 blog = open("/content/build.log",errors="replace").read() if os.path.exists("/content/build.log") else ""
 print("BUILD_DONE:", "BUILD DONE" in blog)
-print("BUILD_ALIVE:", bool(sh("pgrep -f 'build_llama.py|build_30b.py'").strip()))
+print("BUILD_ALIVE:", bool(sh("pgrep -f 'build_30b.py'").strip()))
 print("BUILD_TAIL:", blog[-160:].encode("ascii","replace").decode().replace("\n"," "))
 try:
     with urllib.request.urlopen("http://localhost:8000/health",timeout=5) as r:

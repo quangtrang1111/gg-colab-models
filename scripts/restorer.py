@@ -1,21 +1,28 @@
-"""Autonomous Colab restorer (runs in WSL).
-Retries T4 provisioning until free compute units replenish, then redeploys
-Qwen3-8B via llama.cpp, restarts the tunnel, updates Command Code, and keeps
-the VM alive with a non-expiring ping loop.
+"""Autonomous Colab restorer — WSL (NixOS) edition, resilient + resumable.
+Retries T4 provisioning until free units replenish, then deploys Qwen3-Coder-30B
+(UD-IQ3_XXS, 48K context, llama.cpp), restarts the tunnel, updates Command Code,
+and keeps the VM alive. Tolerates transient colab-exec timeouts and resumes an
+already-running build.
 """
-import subprocess, time, os, re, sys, json
+import subprocess, time, os, re, sys, shutil
+
+# Keep the WSL VM from idling into sleep while the keep-alive runs.
+if os.name != "nt" and not os.environ.get("SYSTEMD_INHIBIT") and shutil.which("systemd-inhibit"):
+    os.environ["SYSTEMD_INHIBIT"] = "1"
+    os.execvp("systemd-inhibit",
+              ["systemd-inhibit", "--what=idle:sleep", "--why=Colab restorer keepalive",
+               sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 PROVIDERS = (os.environ.get("COMMAND_CODE_PROVIDERS")
              or os.path.expanduser("~/.commandcode/providers.json"))
 ENV = dict(os.environ,
-           PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH",""),
-           LD_LIBRARY_PATH=os.path.expanduser("~/.nix-profile/lib") + ":" + os.environ.get("LD_LIBRARY_PATH",""),
+           PATH=os.path.expanduser("~/.local/bin") + os.pathsep + os.environ.get("PATH",""),
+           LD_LIBRARY_PATH=os.path.expanduser("~/.nix-profile/lib") + os.pathsep + os.environ.get("LD_LIBRARY_PATH",""),
            PYTHONUNBUFFERED="1")
 SESSION = "qwen"
 
-def log(*a):
-    print(f"[{time.strftime('%m-%d %H:%M:%S')}]", *a, flush=True)
+def log(*a): print(f"[{time.strftime('%m-%d %H:%M:%S')}]", *a, flush=True)
 
 def colab(args, timeout=300):
     return subprocess.run(["colab","--auth","oauth2",*args],
@@ -29,93 +36,119 @@ def upload(fname):
     return colab(["upload","-s",SESSION,f"{SCRIPTS}/{fname}",f"/content/{fname}"], timeout=120)
 
 def state():
-    r = execf("vm_state.py", timeout=60)
-    d = {}
-    for line in r.stdout.splitlines():
-        if ":" in line:
-            k,_,v = line.partition(":")
-            d[k.strip()] = v.strip()
-    return d, r.stdout
-
-# ---- Phase 1: provision retry ----
-log("RESTORER started. Retrying T4 provisioning every 30 min until units replenish.")
-attempt = 0
-while True:
-    attempt += 1
     try:
-        r = colab(["new","-s",SESSION,"--gpu","T4"], timeout=300)
-        if r.returncode == 0 and "READY" in r.stdout:
-            log(f"T4 PROVISIONED on attempt {attempt}.")
-            break
-        msg = (r.stderr or r.stdout)[-180:].replace("\n"," ")
-        log(f"attempt {attempt}: not available ({msg}). retry in 30 min.")
-    except subprocess.TimeoutExpired:
-        log(f"attempt {attempt}: provision timed out. retry in 30 min.")
-    time.sleep(1800)
+        r = execf("vm_state.py", timeout=60)
+        d = {"_ok": True}
+        for line in r.stdout.splitlines():
+            if ":" in line:
+                k,_,v = line.partition(":"); d[k.strip()] = v.strip()
+        return d
+    except Exception as e:
+        return {"_ok": False, "_err": repr(e)}
 
-# ---- Phase 2: setup ----
-try:
-    for f in ["setup_llama_vm.py","build_llama.py","start_build.py","start_llama.py","start_tunnel.py","vm_state.py","ping.py"]:
-        upload(f)
-    log("scripts uploaded. running setup (deps + cloudflared)...")
-    r = execf("setup_llama_vm.py", timeout=600)
-    if "SETUP DONE" not in r.stdout:
-        log("SETUP FAILED:", r.stdout[-800:], r.stderr[-400:]); sys.exit(1)
-    log("setup done.")
+def session_exists():
+    try:
+        return SESSION in colab(["sessions"], timeout=90).stdout
+    except Exception:
+        return False
 
-    # ---- Phase 3: build + download ----
-    execf("start_build.py", timeout=90)
-    log("build + GGUF download started (detached). polling...")
+def ensure_provisioned():
+    if session_exists():
+        log("session already exists; skipping provision."); return
+    attempt = 0
     while True:
-        d,_ = state()
+        attempt += 1
+        try:
+            r = colab(["new","-s",SESSION,"--gpu","T4"], timeout=300)
+            if r.returncode == 0 and "READY" in r.stdout:
+                log(f"T4 PROVISIONED on attempt {attempt}."); return
+            log(f"attempt {attempt}: not available ({(r.stderr or r.stdout)[-140:].replace(chr(10),' ')}). retry 30 min.")
+        except subprocess.TimeoutExpired:
+            log(f"attempt {attempt}: provision timeout. retry 30 min.")
+        time.sleep(1800)
+
+def wait_build():
+    d = state()
+    if d.get("BUILD_DONE") == "True":
+        log("build already complete."); return
+    if d.get("BUILD_ALIVE") == "True":
+        log("build already running; resuming watch.")
+    else:
+        execf("start_build_30b.py", timeout=90); log("30B build started.")
+    miss = 0
+    while True:
+        d = state()
+        if not d.get("_ok"):
+            miss += 1
+            log(f"state check failed ({d.get('_err','')[:70]}); retry {miss}.")
+            if miss > 15: log("VM unreachable too long."); sys.exit(1)
+            time.sleep(60); continue
+        miss = 0
         if d.get("BUILD_DONE") == "True":
-            log("BUILD COMPLETE."); break
+            log("BUILD COMPLETE."); return
         if d.get("BUILD_ALIVE") != "True":
             log("BUILD PROCESS DIED:", d.get("BUILD_TAIL","")); sys.exit(1)
-        log("building...", d.get("BUILD_TAIL","")[-90:])
+        log("building...", d.get("BUILD_TAIL","")[-80:])
         time.sleep(60)
 
-    # ---- Phase 4: llama-server ----
-    execf("start_llama.py", timeout=90)
-    log("llama-server starting...")
-    for _ in range(40):
-        d,_ = state()
-        if d.get("LLAMA_HEALTH") == "200":
-            log("LLAMA SERVER READY."); break
-        if d.get("LLAMA_ALIVE") != "True":
-            log("LLAMA PROCESS DIED."); sys.exit(1)
+def wait_llama():
+    execf("start_30b.py", timeout=90); log("llama-server (30B) starting...")
+    for _ in range(60):
+        d = state()
+        if d.get("_ok"):
+            if d.get("LLAMA_HEALTH") == "200":
+                log("LLAMA SERVER READY."); return
+            if d.get("LLAMA_ALIVE") != "True":
+                log("LLAMA PROCESS DIED."); sys.exit(1)
         time.sleep(8)
-    else:
-        log("llama-server readiness timeout."); sys.exit(1)
+    log("llama readiness timeout."); sys.exit(1)
 
-    # ---- Phase 5: tunnel ----
-    execf("start_tunnel.py", timeout=90)
-    log("tunnel starting...")
-    url = ""
-    for _ in range(30):
-        d,_ = state()
-        url = d.get("TUNNEL_URL","")
-        if url:
-            log("TUNNEL URL:", url); break
+def wait_tunnel():
+    execf("start_tunnel.py", timeout=90); log("tunnel starting...")
+    for _ in range(40):
+        d = state()
+        if d.get("_ok") and d.get("TUNNEL_URL"):
+            log("TUNNEL URL:", d["TUNNEL_URL"]); return d["TUNNEL_URL"]
         time.sleep(5)
-    if not url:
-        log("no tunnel URL obtained."); sys.exit(1)
+    log("no tunnel URL."); sys.exit(1)
 
-    # ---- Phase 6: update Command Code ----
+def redeploy():
+    for f in ["setup_llama_vm.py","build_30b.py","start_build_30b.py","start_30b.py","start_tunnel.py","vm_state.py","ping.py"]:
+        upload(f)
+    log("scripts uploaded. setup...")
+    r = execf("setup_llama_vm.py", timeout=600)
+    if "SETUP DONE" not in r.stdout:
+        log("SETUP FAILED:", r.stdout[-600:]); sys.exit(1)
+    log("setup done.")
+    wait_build()
+    wait_llama()
+    url = wait_tunnel()
     txt = open(PROVIDERS, encoding="utf-8").read()
-    new = re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com", url, txt)
-    open(PROVIDERS,"w",encoding="utf-8").write(new)
+    open(PROVIDERS,"w",encoding="utf-8").write(re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com", url, txt))
     log("Command Code baseURL updated to", url)
-    log("RESTORE COMPLETE. Translation service live. Entering keep-alive loop.")
-except SystemExit:
-    raise
-except Exception as e:
-    log("RESTORE ERROR:", repr(e)); sys.exit(1)
+    log("RESTORE COMPLETE. Qwen3-Coder-30B live.")
 
-# ---- Phase 7: keep-alive forever ----
-while True:
-    time.sleep(900)
-    try:
-        execf("ping.py", timeout=60)
-    except Exception as e:
-        log("keepalive ping error:", repr(e))
+def main():
+    log("WSL RESTORER (resilient) started. Target: Qwen3-Coder-30B max-speed.")
+    while True:
+        ensure_provisioned()
+        try:
+            redeploy()
+        except SystemExit as e:
+            log(f"redeploy hard failure (code {e.code}); recovering in 120s..."); time.sleep(120); continue
+        except Exception as e:
+            log("transient redeploy error:", repr(e), "- retry in 60s."); time.sleep(60); continue
+        log("Entering keep-alive loop.")
+        while True:
+            time.sleep(900)
+            if not session_exists():
+                log("session lost (VM recycled). redeploying..."); break
+            try:
+                d = state()
+                if d.get("_ok") and d.get("LLAMA_HEALTH") != "200":
+                    log("llama unhealthy; redeploying..."); break
+                execf("ping.py", timeout=60)
+            except Exception as e:
+                log("keepalive ping error:", repr(e))
+
+main()

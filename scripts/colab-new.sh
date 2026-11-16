@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run inside WSL: provision T4 Colab VM and install the AirLLM stack.
+# Run inside WSL: provision a T4 Colab VM and show its status.
+# For the full deployment (build + serve + tunnel + keep-alive) run scripts/restorer.py.
 set -e
 export PATH="$HOME/.local/bin:$PATH"
 export LD_LIBRARY_PATH="$HOME/.nix-profile/lib:$LD_LIBRARY_PATH"

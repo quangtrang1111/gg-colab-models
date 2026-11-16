@@ -7,11 +7,10 @@ def sh(c): return subprocess.run(["bash","-c",c],capture_output=True,text=True).
 
 for _ in range(8):
     subprocess.run(["pkill","-9","-f","llama-server"])
-    subprocess.run(["pkill","-9","-f","run_server"])
     time.sleep(2)
-    if not sh("pgrep -f 'llama-server|run_server'").strip():
+    if not sh("pgrep -f 'llama-server'").strip():
         break
-print("remaining:", sh("pgrep -af 'llama-server|run_server'") or "(none)")
+print("remaining:", sh("pgrep -af 'llama-server'") or "(none)")
 print("port 8000:", sh("ss -ltnp 2>/dev/null | grep :8000") or "(free)")
 
 gguf = glob.glob("/content/gguf/**/*.gguf", recursive=True)

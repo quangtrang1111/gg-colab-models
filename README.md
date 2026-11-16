@@ -69,11 +69,12 @@ To point Command Code at it, `providers.json` should contain:
 
 ## Why it is built this way
 
-**1. AirLLM is the wrong engine on Colab.** AirLLM streams weights from disk and evicts
-every layer back to `meta` after each token, so it re-reads the *entire* model per token.
-Measured: **1176 s TTFT** for an 80B model. Colab's disk is ~214 MB/s against a T4's
-~320 GB/s of VRAM bandwidth — a ~1500× gap. Usable speed requires the weights **resident
-in VRAM**, which is why this project uses llama.cpp instead.
+**1. The weights must be resident in VRAM.** Any engine that streams weights from disk and
+evicts them between tokens re-reads the *entire* model per token — one such
+disk-streaming approach measured **1176 s TTFT** for an 80B model here. Colab's disk is
+~214 MB/s against a T4's ~320 GB/s of VRAM bandwidth — a ~1500× gap. Usable interactive
+speed therefore requires the weights **resident in VRAM**, which is why this project uses
+llama.cpp with full GPU offload (`-ngl 99`).
 
 **2. Free Colab GPU quota is smaller than a compile.** Free GPU time arrives in ~10–15
 minute bursts (`colab usage` hits `0.00`, then `colab new --gpu T4` fails with
@@ -164,12 +165,16 @@ Colab and run there) and **local** (run on your machine).
 | `auth_win.py` | Windows OAuth helper (MSYS FIFOs can't feed native `colab.exe` stdin) |
 | `config.py` | shared config — resolves the tunnel URL / model / providers path |
 | `code-test.py` | coding benchmark (TTFT, decode rate) |
-| `verify_32k.py` | large-context test (sends a ~44K-token prompt) |
+| `verify_32k.py` | large-context test (sends a ~46K-token prompt, above the 35K declared window × 1.3) |
 | `prefill_bench.py` | prefill throughput benchmark (forces a full prefill) |
-| `speed-test.py`, `stream-test.py`, `translate-test.py` | misc. latency / streaming / EN→VI tests |
-| `bundle_test.py` | verify the published HF bundle is self-contained (`ldd` check) |
+| `translate-test.py` | EN→VI translation test (the original use case for this setup) || `bundle_test.py` | verify the published HF bundle is self-contained (`ldd` check) |
 | `upload_readme.py` | publish the HF repo card |
 | `ctx_check.py`, `buf_check.py`, `mib_check.py`, `req_timing.py`, `llama_log_check.py` | diagnostics |
+| `diag_30b.py`, `check_tunnel.py`, `tunnel_diag.py`, `cpu_diag.py` | VM-side diagnostics (server log, tunnel, processes) |
+| `restart_build.py` | restart the build on the VM (picks up an updated build script) |
+| `dl_iq3.py` | download the IQ3_XXS GGUF directly from the unsloth repo |
+| `check_build_env.py`, `check_cpu_cuda.py` | build-environment / CUDA-toolkit checks (used on the CPU session) |
+| `colab-new.sh`, `colab-auth.sh`, `colab-auth-win.sh` | WSL helpers for the Colab CLI |
 
 ---
 
