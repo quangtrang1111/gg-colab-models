@@ -1,0 +1,25 @@
+# Logs and local run artifacts
+*.log
+*.err.log
+auth_code.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Third-party checkout (reference only, not part of this project)
+google-colab-cli/
+
+# Large model / bundle artifacts
+*.gguf
+*.tar.gz
+*.safetensors
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
