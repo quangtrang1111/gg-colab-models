@@ -4,11 +4,10 @@ Retries T4 provisioning until free units replenish, then deploys Qwen3-Coder-30B
 Tolerates transient colab-exec timeouts; resumes an already-running build.
 """
 import subprocess, time, os, re, sys, ctypes
+import client_urls
 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # keep PC awake
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-PROVIDERS = (os.environ.get("COMMAND_CODE_PROVIDERS")
-             or os.path.expanduser("~/.commandcode/providers.json"))
 ENV = dict(os.environ,
            PATH=os.path.expanduser("~/.local/bin") + os.pathsep + os.environ.get("PATH",""),
            PYTHONUNBUFFERED="1")
@@ -115,9 +114,8 @@ def redeploy():
     wait_build()
     wait_llama()
     url = wait_tunnel()
-    txt = open(PROVIDERS, encoding="utf-8").read()
-    open(PROVIDERS,"w",encoding="utf-8").write(re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com", url, txt))
-    log("Command Code baseURL updated to", url)
+    changed = client_urls.update_all(url)
+    log("client configs updated to", url, "->", ", ".join(changed) or "(none found)")
     log("RESTORE COMPLETE. Qwen3-Coder-30B live.")
 
 def main():

@@ -1,17 +1,20 @@
 # gg-colab-models
 
 Serve a strong open-weight coding LLM on a **free Google Colab T4** and consume it from
-[Command Code](https://github.com/quangtrang1111) as a BYOK "local" model — with no API key,
-no local GPU requirement, and no spend.
+**any OpenAI-compatible client** — no API key, no local GPU, no spend.
 
 Currently running: **Qwen3-Coder-30B-A3B-Instruct** (UD-IQ3_XXS) in **llama.cpp**, served
 through a cloudflared tunnel with an OpenAI-compatible `/v1` API.
 
 ```
-Command Code  ──►  cloudflared tunnel  ──►  Colab T4 (15 GB VRAM)
-providers.json         (HTTPS)               └─ llama-server (llama.cpp, -ngl 99)
-                                                   └─ Qwen3-Coder-30B-A3B UD-IQ3_XXS.gguf
+Your AI client  ──►  cloudflared tunnel  ──►  Colab T4 (15 GB VRAM)
+(OpenAI API)              (HTTPS)               └─ llama-server (llama.cpp, -ngl 99)
+                                                    └─ Qwen3-Coder-30B-A3B UD-IQ3_XXS.gguf
 ```
+
+Because the endpoint is plain OpenAI `/v1`, it plugs into IDE agents, chat UIs, SDKs and
+CLI tools alike. **Command Code** is the client this setup was developed and tested
+against — see [Connect a client](#connect-a-client) for the others.
 
 ### Links
 
@@ -38,10 +41,26 @@ python scripts/restorer_win.py
 ```
 
 The restorer is **autonomous and self-healing**: it retries provisioning while the free
-GPU quota is empty, redeploys end-to-end, rewrites the tunnel URL into Command Code's
-`providers.json`, and then keeps the VM alive.
+GPU quota is empty, redeploys end-to-end, rewrites the tunnel URL into the client configs
+it finds, and then keeps the VM alive.
 
-To point Command Code at it, `providers.json` should contain:
+---
+
+## Connect a client
+
+The endpoint speaks the OpenAI API, so any client that accepts a custom base URL can use
+it. Register it as an OpenAI-compatible provider with:
+
+| Setting | Value |
+|---|---|
+| Base URL | `https://<random>.trycloudflare.com/v1` — printed by the restorer, and rewritten automatically on every redeploy |
+| API key | none; the server does not require one |
+| Model id | `qwen3-coder-30b` |
+| Context window | 35,000 tokens (the server itself holds 49,152) |
+
+### Command Code — the tested client
+
+Register a BYOK provider in `~/.commandcode/providers.json`:
 
 ```json
 {
@@ -64,6 +83,26 @@ To point Command Code at it, `providers.json` should contain:
   }
 }
 ```
+
+The restorer keeps this file's `baseURL` in sync on every redeploy.
+
+### Other clients
+
+| Client | Where the base URL goes |
+|---|---|
+| Continue | `~/.continue/config.json` → `models[].apiBase` |
+| Aider | `~/.aider.conf.yml` → `OPENAI_API_BASE` |
+| Cline / Roo Code (VS Code) | settings → OpenAI Compatible → Base URL |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| LiteLLM proxy | `~/.config/litellm/config.yaml` → `model_list[].api_base` |
+| Open WebUI | Admin → Connections → OpenAI → Base URL |
+| Cursor | `~/.cursor/mcp.json` |
+| Any OpenAI SDK | `base_url=` / `OPENAI_BASE_URL` |
+
+The restorer rewrites the tunnel URL in the Command Code, Continue, Aider, LiteLLM,
+Cursor, Windsurf and VS Code extension configs that exist on this machine. For anything
+else, either point the client at a stable URL you control, or add its config path to the
+`CLIENT_CONFIGS` environment variable so the restorer keeps it in sync too.
 
 ---
 
@@ -102,15 +141,18 @@ ceiling is ~14.5 GiB (not the 15,360 MiB `nvidia-smi` reports).
 | **49,152** | **`q8_0` / `q4_0`** | **14,239 MiB** | **current config** |
 | 65,536 | `q8_0` / `q4_0` | ~14,843 MiB | `CUDA error: the resource allocation failed` |
 
-**4. Clients over-count tokens.** Command Code's accounting runs **~1.3×** llama.cpp's — it sent
-21,186 tokens while declaring 16,384, and 42,611 while declaring 32,768. So the server's
-`n_ctx` must be **≥ 1.3 × the declared `contextWindow`**, or requests are rejected with
+**4. Client token accounting does not match the server's.** A client's own tokenizer, or
+its estimate of the conversation, can differ from llama.cpp's — so it may send more tokens
+than it thinks it has. Measured with Command Code: **~1.3×** — it sent 21,186 tokens while
+declaring 16,384, and 42,611 while declaring 32,768. Requests beyond the server's
+`n_ctx` are rejected with
 `request (N tokens) exceeds the available context size (M tokens)`.
 
-That is why the *declared* window (`contextWindow: 35000` → ≈45,500 real tokens) is kept
-below the server's 49,152 capacity, and why the display name says **48K** while the client
-window is 35K: the 48K is what the **server** can hold, and the client is deliberately
-capped lower so its 1.3× over-count still fits.
+So the server's `n_ctx` must be **≥ 1.3 × the declared `contextWindow`** of whichever
+client you use. That is why the *declared* window (`contextWindow: 35000` → ≈45,500 real
+tokens) is kept below the server's 49,152 capacity, and why the display name says **48K**
+while the client window is 35K: the 48K is what the **server** can hold, and the client is
+deliberately capped lower so its over-count still fits.
 
 **5. Prefill speed is set by the ubatch.** With quantized weights the ~12.85 GB is re-read
 for *every* ubatch, so a 21K-token prompt at `-ub 256` means 83 ubatches (~1 TB of weight
@@ -163,7 +205,8 @@ Colab and run there) and **local** (run on your machine).
 | `restorer.py` | same, for WSL |
 | `cpu_watcher.py` | drive the CPU-session build; keeps the PC awake |
 | `auth_win.py` | Windows OAuth helper (MSYS FIFOs can't feed native `colab.exe` stdin) |
-| `config.py` | shared config — resolves the tunnel URL / model / providers path |
+| `config.py` | shared config — resolves the tunnel URL / model / client config path |
+| `client_urls.py` | knows where OpenAI-compatible clients keep their base URL and keeps them in sync when the tunnel changes |
 | `code-test.py` | coding benchmark (TTFT, decode rate) |
 | `verify_32k.py` | large-context test (sends a ~46K-token prompt, above the 35K declared window × 1.3) |
 | `prefill_bench.py` | prefill throughput benchmark (forces a full prefill) |
@@ -184,8 +227,9 @@ No secrets are committed. Override via environment variables:
 
 | Variable | Purpose |
 |---|---|
-| `TUNNEL_URL` | base URL of the server (default: read from `providers.json`, else `http://127.0.0.1:8000`) |
-| `MODEL` | model id (default: read from `providers.json`, else `qwen3-coder-30b`) |
+| `TUNNEL_URL` | base URL of the server (default: a tunnel URL found in any known client config, else `http://127.0.0.1:8000`) |
+| `MODEL` | model id (default: read from Command Code's `providers.json`, else `qwen3-coder-30b`) |
+| `CLIENT_CONFIGS` | extra client config paths/globs to read from and keep in sync (os.pathsep-separated) |
 | `COMMAND_CODE_PROVIDERS` | path to Command Code's `providers.json` (auto-detected) |
 | `HF_TOKEN` | Hugging Face **write** token — only needed to publish the engine bundle |
 
@@ -198,7 +242,8 @@ TUNNEL_URL=https://xyz.trycloudflare.com python scripts/code-test.py
 ## Operational notes
 
 - **The tunnel URL changes on every redeploy** (cloudflared quick tunnels are anonymous), so
-  the restorer rewrites `providers.json` automatically.
+  the restorer rewrites it in every known client config it finds on this machine — see
+  [Connect a client](#connect-a-client).
 - **`colab exec` has a 30 s silence timeout** — pass `--timeout N` for slow cells, and run
   one exec at a time (cells are serial; concurrent execs drop with "Connection was lost").
 - **`colab exec` has no `-c` inline flag** — use `-f <file>`.

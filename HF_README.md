@@ -22,8 +22,10 @@ This repo contains the **engine only**. The model weights (Qwen3-Coder-30B-A3B G
 (`Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf`, 12.85 GB).
 
 > **Project & full scripts:** [github.com/quangtrang1111/gg-colab-models](https://github.com/quangtrang1111/gg-colab-models)
-> — the complete toolkit that deploys this engine on a free Colab T4 and wires it into
-> Command Code as a BYOK model (autonomous restorer, benchmarks, diagnostics).
+> — the complete toolkit that deploys this engine on a free Colab T4 and exposes it as a
+> standard OpenAI-compatible `/v1` endpoint, usable from **any** AI client (IDE agents,
+> chat UIs, SDKs, CLI tools). Command Code is the client it was developed and tested
+> against. Includes an autonomous restorer, benchmarks and diagnostics.
 
 ---
 
@@ -115,12 +117,35 @@ Verified on a Colab T4 with `Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf`:
 
 | Setting | Value | Why |
 |---|---|---|
-| `-c` | `49152` | Command Code-style clients over-count tokens by ~1.3×; 49,152 is the **server** capacity, while the client's declared window is held at 35,000 so its over-count still fits |
+| `-c` | `49152` | a client's own token accounting can exceed the server's by ~1.3×; 49,152 is the **server** capacity, while the client's declared window is held lower (35,000 for Command Code) so its over-count still fits |
 | `--cache-type-k` | `q8_0` | attention keys drive retrieval quality — keep this at 8-bit |
 | `--cache-type-v` | `q4_0` | the cheap knob; halves KV memory vs `q8_0` |
 | `-fa` | `on` | flash attention (also required for a quantized V cache) |
 | `-ub` | `1024` | quantized weights are re-read per ubatch, so a bigger ubatch is much faster prefill |
 | `-ngl` | `99` | full GPU offload |
+
+## Using it from any AI client
+
+`llama-server` speaks the **OpenAI API**, so the endpoint works with anything that
+accepts a custom base URL — IDE agents, chat UIs, SDKs and CLI tools alike. Command Code
+is the client this setup was developed and tested against, but nothing here is specific
+to it.
+
+| Setting | Value |
+|---|---|
+| Base URL | `https://<your-host>/v1` |
+| API key | none; the server does not require one |
+| Model id | the `--alias` you passed (`qwen3-coder-30b` in the reference config) |
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://<your-host>/v1", api_key="not-needed")
+client.chat.completions.create(model="qwen3-coder-30b", messages=[...])
+```
+
+For the full Colab deployment (provisioning, tunnel, keep-alive, and keeping client
+configs in sync when the tunnel URL changes) see
+[github.com/quangtrang1111/gg-colab-models](https://github.com/quangtrang1111/gg-colab-models).
 
 ## Advantages
 

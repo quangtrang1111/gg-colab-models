@@ -5,6 +5,7 @@ and keeps the VM alive. Tolerates transient colab-exec timeouts and resumes an
 already-running build.
 """
 import subprocess, time, os, re, sys, shutil
+import client_urls
 
 # Keep the WSL VM from idling into sleep while the keep-alive runs.
 if os.name != "nt" and not os.environ.get("SYSTEMD_INHIBIT") and shutil.which("systemd-inhibit"):
@@ -14,8 +15,6 @@ if os.name != "nt" and not os.environ.get("SYSTEMD_INHIBIT") and shutil.which("s
                sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-PROVIDERS = (os.environ.get("COMMAND_CODE_PROVIDERS")
-             or os.path.expanduser("~/.commandcode/providers.json"))
 ENV = dict(os.environ,
            PATH=os.path.expanduser("~/.local/bin") + os.pathsep + os.environ.get("PATH",""),
            LD_LIBRARY_PATH=os.path.expanduser("~/.nix-profile/lib") + os.pathsep + os.environ.get("LD_LIBRARY_PATH",""),
@@ -123,9 +122,8 @@ def redeploy():
     wait_build()
     wait_llama()
     url = wait_tunnel()
-    txt = open(PROVIDERS, encoding="utf-8").read()
-    open(PROVIDERS,"w",encoding="utf-8").write(re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com", url, txt))
-    log("Command Code baseURL updated to", url)
+    changed = client_urls.update_all(url)
+    log("client configs updated to", url, "->", ", ".join(changed) or "(none found)")
     log("RESTORE COMPLETE. Qwen3-Coder-30B live.")
 
 def main():
